@@ -4,6 +4,14 @@ import httpx
 from ..core.config import settings
 
 
+PROPERTY_TYPE_MAP = {
+    "apartment": "apartment_condo",
+    "condo": "apartment_condo",
+    "house": "single_family",
+    "townhouse": "townhouse"
+}
+
+
 class RealtorService:
     """Service for fetching listings from Realtor.com API via RapidAPI"""
 
@@ -21,7 +29,8 @@ class RealtorService:
         bedrooms: Optional[int] = None,
         max_price: Optional[float] = None,
         limit: int = 10,
-        listing_type: str = "for_rent",
+        search_type: str = "rent",  # "rent" or "buy"
+        property_type: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         headers = {
             "X-RapidAPI-Key": self.rapidapi_key,
@@ -31,8 +40,16 @@ class RealtorService:
 
         url = f"https://{self.rapidapi_host}/properties/v3/list"
 
+        # Map search_type to API listing_type
+        if search_type == "rent":
+            listing_type = "for_rent"
+        elif search_type == "buy":
+            listing_type = "for_sale"
+        else:
+            listing_type = "for_rent"  # Default to rent
+
         payload = {
-            "limit": 50,  # 🔥 Get many more results to choose from
+            "limit": 50,
             "offset": 0,
             "city": city,
             "state_code": state_code.upper(),
@@ -40,12 +57,18 @@ class RealtorService:
             "sort": {"direction": "desc", "field": "list_date"},
         }
 
-        # 🔥 Only apply max_price filter in API, not bedrooms (filter locally)
-        if max_price:
-            payload["price_max"] = int(max_price * 1.2)  # Add 20% buffer for better results
-            payload["price_min"] = 300  # Very low minimum
+        if property_type:
+            api_property_type = PROPERTY_TYPE_MAP.get(property_type.lower())
+            if api_property_type:
+                payload["property_type"] = api_property_type
 
-        print(f"🔍 Realtor API Request: {payload}")
+        if max_price:
+            if search_type == "rent":
+                payload["price_max"] = int(max_price * 1.2)
+                payload["price_min"] = 300
+            elif search_type == "buy":
+                payload["price_max"] = int(max_price * 1.1)
+                payload["price_min"] = 50000
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -57,48 +80,51 @@ class RealtorService:
                 if not properties:
                     return []
 
-                # 🔥 Parse ALL listings first, then filter smartly
                 all_listings = []
                 for prop in properties:
                     listing = self._parse_listing(prop)
                     if listing:
                         all_listings.append(listing)
 
-                # 🔥 Multi-tier filtering for better results
+                if property_type:
+                    type_filtered_listings = []
+                    for listing in all_listings:
+                        if self._matches_property_type(listing, property_type):
+                            type_filtered_listings.append(listing)
+                    all_listings = type_filtered_listings
+
                 perfect_matches = []
                 good_matches = []
                 acceptable_matches = []
-                
+
                 for listing in all_listings:
                     match_level = self._evaluate_listing_match(listing, bedrooms, max_price)
-                    
+
                     if match_level == "perfect":
                         perfect_matches.append(listing)
-                    elif match_level == "good": 
+                    elif match_level == "good":
                         good_matches.append(listing)
                     elif match_level == "acceptable":
                         acceptable_matches.append(listing)
 
-                # 🔥 Sort each tier by preference
                 def sort_by_preference(listings):
-                    # Prioritize: has price > has bedrooms > has description
-                    return sorted(listings, key=lambda x: (
-                        bool(x.get("price")),           # Has price
-                        bool(x.get("bedrooms")),        # Has bedroom info
-                        bool(x.get("square_feet")),     # Has sqft
-                        -(x.get("price", 99999))        # Lower price better
-                    ), reverse=True)
-                
+                    return sorted(
+                        listings,
+                        key=lambda x: (
+                            bool(x.get("price")),
+                            bool(x.get("bedrooms")),
+                            bool(x.get("square_feet")),
+                            -(x.get("price") or 99999)
+                        ),
+                        reverse=True
+                    )
+
                 perfect_matches = sort_by_preference(perfect_matches)
                 good_matches = sort_by_preference(good_matches)
                 acceptable_matches = sort_by_preference(acceptable_matches)
-                
-                # 🔥 Combine results: perfect first, then good, then acceptable
+
                 final_results = (perfect_matches + good_matches + acceptable_matches)[:limit]
-                
-                print(f"✅ Found {len(perfect_matches)} perfect, {len(good_matches)} good, {len(acceptable_matches)} acceptable matches")
-                print(f"✅ Returning {len(final_results)} total listings")
-                
+
                 return final_results
 
         except httpx.TimeoutException:
@@ -111,36 +137,67 @@ class RealtorService:
     def _parse_listing(self, prop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Parse and normalize a property result from Realtor API"""
         try:
-            location = prop.get("location", {})
-            address = location.get("address", {})
-            description = prop.get("description", {})
-            community = prop.get("community", {})
+            location = prop.get("location") or {}
+            address = location.get("address") or {}
+            description = prop.get("description") or {}
+            community = prop.get("community") or {}
 
-            # Price with fallback to community price range
-            price = (
-                prop.get("list_price") or
-                prop.get("price") or
-                prop.get("rent_price") or
-                location.get("price")
-            )
-
+            # Price extraction with proper range handling
+            price = None
             price_range = None
-            if not price and (community.get("price_min") or community.get("price_max")):
-                price_range = f"${community.get('price_min','')} - ${community.get('price_max','')}"
-                if community.get("price_min") and community.get("price_max"):
-                    price = (community["price_min"] + community["price_max"]) / 2
-                else:
-                    price = community.get("price_min") or community.get("price_max")
+
+            is_for_sale = "for_sale" in prop.get("status", "")
+            price_suffix = "" if is_for_sale else "/mo"
+
+            list_price_min = prop.get("list_price_min")
+            list_price_max = prop.get("list_price_max")
+
+            if list_price_min or list_price_max:
+                if list_price_min and list_price_max and list_price_min != list_price_max:
+                    price_range = f"${int(list_price_min):,} - ${int(list_price_max):,}{price_suffix}"
+                    price = (list_price_min + list_price_max) / 2
+                elif list_price_min:
+                    price_range = f"From ${int(list_price_min):,}{price_suffix}"
+                    price = list_price_min
+                elif list_price_max:
+                    price_range = f"Up to ${int(list_price_max):,}{price_suffix}"
+                    price = list_price_max
+
+            if not price:
+                price = (
+                    prop.get("rent_price")
+                    or prop.get("list_price")
+                    or prop.get("price")
+                    or location.get("price")
+                )
+
+            if not price_range and community:
+                community_price_min = community.get("price_min")
+                community_price_max = community.get("price_max")
+                if community_price_min or community_price_max:
+                    if community_price_min and community_price_max:
+                        price_range = f"${int(community_price_min):,} - ${int(community_price_max):,}{price_suffix}"
+                        price = (community_price_min + community_price_max) / 2
+                    elif community_price_min:
+                        price_range = f"From ${int(community_price_min):,}{price_suffix}"
+                        price = community_price_min
+                    elif community_price_max:
+                        price_range = f"Up to ${int(community_price_max):,}{price_suffix}"
+                        price = community_price_max
+
+            if not price_range and price:
+                price_range = f"${int(price):,}{price_suffix}"
+            elif not price and not price_range:
+                price_range = "Contact for pricing"
 
             # Extract bedroom/bathroom/sqft info
             bedrooms = description.get("beds")
             bathrooms = description.get("baths")
             square_feet = description.get("sqft")
 
-            # 🔥 For apartment complexes, use mid-range estimates
             if bedrooms is None:
                 beds_min = description.get("beds_min")
-                beds_max = description.get("beds_max") 
+                beds_max = description.get("beds_max")
                 if beds_min is not None and beds_max is not None:
                     bedrooms = int((beds_min + beds_max) / 2)
                 elif beds_min is not None:
@@ -168,7 +225,6 @@ class RealtorService:
                 elif sqft_max is not None:
                     square_feet = sqft_max
 
-            # Build title
             address_line = address.get("line", "")
             city = address.get("city", "")
             property_type = description.get("type", "")
@@ -181,17 +237,13 @@ class RealtorService:
             elif city: title_parts.append(f"in {city}")
             title = " ".join(title_parts) if title_parts else f"Property in {city}"
 
-            # Build description
             desc_parts = []
             if description.get("sub_type"): desc_parts.append(description["sub_type"].title())
             if property_type: desc_parts.append(f"{property_type} property")
             if bedrooms and bathrooms: desc_parts.append(f"with {bedrooms} bedrooms and {bathrooms} bathrooms")
             if square_feet: desc_parts.append(f"({square_feet} sqft)")
-            
-            # 🔥 Add range info for apartment complexes
             if description.get("beds_min") and description.get("beds_max") and not description.get("beds"):
                 desc_parts.append(f"Available in {description['beds_min']}-{description['beds_max']} bedroom layouts")
-            
             full_description = ". ".join(desc_parts) if desc_parts else "Rental property"
 
             return {
@@ -208,20 +260,36 @@ class RealtorService:
                 "url": prop.get("href", ""),
                 "source": "Realtor",
                 "photos": [photo.get("href") for photo in prop.get("photos", [])[:3]],
-                # Store original ranges for matching
                 "beds_min": description.get("beds_min"),
                 "beds_max": description.get("beds_max"),
                 "sqft_min": description.get("sqft_min"),
                 "sqft_max": description.get("sqft_max"),
             }
-        except Exception as e:
-            print(f"❌ Error parsing listing: {e}")
+        except Exception:
             return None
 
+    def _matches_property_type(self, listing: Dict[str, Any], requested_type: str) -> bool:
+        description = listing.get("description", "").lower()
+        title = listing.get("title", "").lower()
+
+        if requested_type.lower() == "apartment":
+            apartment_keywords = ["apartment", "apt", "complex", "community"]
+            exclude_keywords = ["single_family", "single family", "townhome", "townhouse"]
+            url = listing.get("url", "").lower()
+            has_apt_in_url = "apt" in url or "unit" in url
+            has_apartment_keywords = any(keyword in description or keyword in title for keyword in apartment_keywords)
+            has_exclude_keywords = any(keyword in description for keyword in exclude_keywords)
+            return (has_apartment_keywords or has_apt_in_url) and not has_exclude_keywords
+
+        elif requested_type.lower() == "condo":
+            return "condo" in description or "condo" in title
+        elif requested_type.lower() in ["house", "single_family"]:
+            return "single_family" in description or "single family" in description
+        elif requested_type.lower() == "townhouse":
+            return "townhome" in description or "townhouse" in description
+        return True
+
     def _evaluate_listing_match(self, listing: Dict[str, Any], target_bedrooms: Optional[int], max_price: Optional[float]) -> str:
-        """Evaluate how well a listing matches the search criteria"""
-        
-        # Skip listings with no useful info
         if not listing.get("city") or not listing.get("title"):
             return "reject"
         
@@ -229,41 +297,37 @@ class RealtorService:
         bedrooms = listing.get("bedrooms")
         beds_min = listing.get("beds_min")
         beds_max = listing.get("beds_max")
-        
-        # 🔥 Price evaluation
+
         price_match = "unknown"
         if price:
             if max_price:
                 if price <= max_price:
                     price_match = "perfect"
-                elif price <= max_price * 1.1:  # 10% over budget
+                elif price <= max_price * 1.1:
                     price_match = "acceptable"
                 else:
-                    return "reject"  # Too expensive
+                    return "reject"
             else:
-                price_match = "perfect"  # No price limit specified
-        
-        # 🔥 Bedroom evaluation  
+                price_match = "perfect"
+
         bedroom_match = "unknown"
         if target_bedrooms:
             if bedrooms:
                 if bedrooms == target_bedrooms:
                     bedroom_match = "perfect"
-                elif abs(bedrooms - target_bedrooms) <= 1:
-                    bedroom_match = "good"
                 else:
-                    bedroom_match = "acceptable"  # Still might be interesting
+                    return "reject"  # Strict: reject if exact bedroom count doesn't match
             elif beds_min is not None and beds_max is not None:
                 if beds_min <= target_bedrooms <= beds_max:
-                    bedroom_match = "good"  # Available in desired size
+                    bedroom_match = "perfect"  # Apartment complex has the requested bedroom count available
                 else:
-                    bedroom_match = "acceptable"
+                    return "reject"  # Reject if complex doesn't offer target bedroom count
             else:
-                bedroom_match = "acceptable"  # No bedroom info, but keep it
+                # No bedroom info available - be lenient for now but rank lower
+                bedroom_match = "acceptable"
         else:
             bedroom_match = "perfect"  # No bedroom preference specified
-        
-        # 🔥 Determine overall match level
+
         if price_match == "perfect" and bedroom_match == "perfect":
             return "perfect"
         elif (price_match in ["perfect", "good"] and bedroom_match in ["perfect", "good"]) or \
@@ -283,12 +347,14 @@ async def fetch_realtor_listings(
     state_code: str,
     bedrooms: Optional[int] = None,
     max_price: Optional[float] = None,
-    listing_type: str = "for_rent",
+    search_type: str = "rent",
+    property_type: Optional[str] = None,
 ):
     return await realtor_service.fetch_realtor_listings(
         city=city,
         state_code=state_code,
         bedrooms=bedrooms,
         max_price=max_price,
-        listing_type=listing_type,
+        search_type=search_type,
+        property_type=property_type,
     )

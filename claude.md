@@ -19,7 +19,7 @@ Build AI-powered housing search that aggregates real estate data and provides sm
 - AI/NLP: OpenAI API + Sentence Transformers + spaCy
 - Frontend: React + Next.js + Tailwind CSS
 - Deployment: Docker + Cloud hosting
-
+x
 ## Project Structure
 ```
 housing-recommender/
