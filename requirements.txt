@@ -1,0 +1,43 @@
+# FastAPI and ASGI server
+fastapi==0.115.2
+uvicorn[standard]==0.32.0
+
+# Database and ORM
+sqlalchemy==2.0.36
+psycopg2-binary>=2.9.10
+alembic==1.14.0   # DB migrations
+
+# Pydantic for data validation
+pydantic==2.9.2
+pydantic-settings==2.6.0
+
+# Environment and configuration
+python-dotenv==1.0.1
+
+# AI/ML libraries
+openai==1.51.2
+sentence-transformers==3.2.1
+spacy==3.8.7
+en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+
+# HTTP requests for APIs
+aiohttp==3.10.10
+httpx==0.28.1
+tenacity==9.0.0   # retry failed API calls
+
+# Data processing
+pandas==2.2.3
+numpy==2.1.2
+
+# Web scraping (backup)
+beautifulsoup4==4.12.3
+
+# Caching
+redis==5.2.0
+
+# Authentication (future)
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+
+# Testing
+pytest==8.3.3
