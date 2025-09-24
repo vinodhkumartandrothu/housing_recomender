@@ -246,6 +246,76 @@ class RealtorService:
                 desc_parts.append(f"Available in {description['beds_min']}-{description['beds_max']} bedroom layouts")
             full_description = ". ".join(desc_parts) if desc_parts else "Rental property"
 
+            # Extract photos from multiple possible locations in the API response
+            photos_data = []
+            primary_photo = None
+
+            # Try different photo field locations that Realtor API might use
+            possible_photo_fields = [
+                prop.get("photos", []),
+                prop.get("photo", []) if isinstance(prop.get("photo"), list) else ([prop.get("photo")] if prop.get("photo") else []),
+                prop.get("images", []),
+                prop.get("picture", []) if isinstance(prop.get("picture"), list) else ([prop.get("picture")] if prop.get("picture") else [])
+            ]
+
+            # Also check nested locations
+            if prop.get("primary_photo"):
+                possible_photo_fields.append([prop.get("primary_photo")])
+
+            # Check if photos are nested in other objects
+            description = prop.get("description", {})
+            if isinstance(description, dict) and description.get("photos"):
+                possible_photo_fields.append(description.get("photos", []))
+
+            community = prop.get("community", {})
+            if isinstance(community, dict) and community.get("photos"):
+                possible_photo_fields.append(community.get("photos", []))
+
+            # Find the first valid photo collection
+            for photo_collection in possible_photo_fields:
+                if photo_collection and len(photo_collection) > 0:
+                    photos_data = photo_collection
+                    break
+
+            # Extract photo URLs from the found collection
+            photo_urls = []
+            if photos_data and len(photos_data) > 0:
+                for photo in photos_data[:5]:  # Get up to 5 photos
+                    photo_url = None
+
+                    # Handle different photo object structures
+                    if isinstance(photo, str):
+                        # Direct URL string
+                        photo_url = photo
+                    elif isinstance(photo, dict):
+                        # Photo object with possible fields
+                        photo_url = (
+                            photo.get("href") or
+                            photo.get("url") or
+                            photo.get("image") or
+                            photo.get("src") or
+                            photo.get("link")
+                        )
+
+                    if photo_url and isinstance(photo_url, str):
+                        # Handle different URL formats
+                        if photo_url.startswith("//"):
+                            photo_url = "https:" + photo_url
+                        elif photo_url.startswith("/"):
+                            # Relative URL, probably from realtor.com
+                            photo_url = "https://realtor.com" + photo_url
+                        elif not photo_url.startswith("http"):
+                            # Assume it needs https
+                            photo_url = "https://" + photo_url
+
+                        # Basic validation that it looks like an image URL
+                        if any(ext in photo_url.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp']) or 'photo' in photo_url.lower() or 'image' in photo_url.lower():
+                            photo_urls.append(photo_url)
+
+                # Set primary photo as the first valid photo
+                primary_photo = photo_urls[0] if photo_urls else None
+
+
             return {
                 "id": str(prop.get("property_id", "")),
                 "title": title,
@@ -259,7 +329,8 @@ class RealtorService:
                 "state": address.get("state_code", ""),
                 "url": prop.get("href", ""),
                 "source": "Realtor",
-                "photos": [photo.get("href") for photo in prop.get("photos", [])[:3]],
+                "photo_url": primary_photo,  # Primary photo for easy access
+                "photos": photo_urls,  # All available photos
                 "beds_min": description.get("beds_min"),
                 "beds_max": description.get("beds_max"),
                 "sqft_min": description.get("sqft_min"),
