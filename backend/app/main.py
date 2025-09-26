@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.database import engine, Base
-from .api.endpoints import search, listings
+from .api.endpoints import search, listings, insights
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -33,6 +33,12 @@ app.include_router(
     listings.router,
     prefix="/api/v1",
     tags=["listings"]
+)
+
+app.include_router(
+    insights.router,
+    prefix="/api/v1",
+    tags=["ai-insights"]
 )
 
 

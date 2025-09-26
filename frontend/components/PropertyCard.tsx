@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { aiInsightsService, PropertyInsights } from '@/services/aiInsights';
 
 interface Listing {
   id: number;
@@ -10,6 +11,8 @@ interface Listing {
   square_feet: number;
   city: string;
   state: string;
+  address?: string;        // ✅ ADD THIS
+  full_address?: string; 
   url?: string;
   description?: string;
   photo_url?: string;
@@ -26,13 +29,48 @@ const PropertyCard: React.FC<PropertyCardProps> = ({ listing, searchType, format
   // Default placeholder image for properties without photos
   const defaultPlaceholder = 'https://images.unsplash.com/photo-1564013799919-ab600027ffc6?w=400&h=300&fit=crop&auto=format&q=80';
 
-  const [isSaved, setIsSaved] = React.useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const [insights, setInsights] = useState<PropertyInsights | null>(null);
+  const [loadingInsights, setLoadingInsights] = useState(true);
 
   // Check if property is already saved on mount
-  React.useEffect(() => {
+  useEffect(() => {
     const savedProperties = JSON.parse(localStorage.getItem('savedProperties') || '[]');
     setIsSaved(savedProperties.some((saved: Listing) => saved.id === listing.id));
   }, [listing.id]);
+
+  // Generate AI insights for the property
+  useEffect(() => {
+    const generateInsights = async () => {
+      if (!listing.city || !listing.state) {
+        setLoadingInsights(false);
+        return;
+      }
+
+      try {
+        const propertyData = {
+          city: listing.city,
+          state: listing.state,
+          address: listing.address || listing.full_address || undefined,
+          price: listing.price || undefined,
+          bedrooms: listing.bedrooms || undefined,
+          bathrooms: listing.bathrooms || undefined,
+          square_feet: listing.square_feet || undefined,
+          property_type: 'property',
+          search_type: searchType
+        };
+
+        const aiInsights = await aiInsightsService.getCachedInsights(propertyData);
+        setInsights(aiInsights);
+      } catch (error) {
+        console.error('Failed to generate insights:', error);
+      } finally {
+        setLoadingInsights(false);
+      }
+    };
+
+    generateInsights();
+  }, [listing, searchType]);
 
   const toggleSaved = () => {
     const savedProperties = JSON.parse(localStorage.getItem('savedProperties') || '[]');
@@ -196,6 +234,76 @@ const PropertyCard: React.FC<PropertyCardProps> = ({ listing, searchType, format
             {listing.description}
           </p>
         )}
+
+        {/* AI Insights Section - Enhanced with Real Data */}
+        <div className="pt-4 border-t border-gray-100">
+          <div className="mb-3">
+            <h4 className="text-sm font-semibold text-gray-800 flex items-center">
+              <div className="w-5 h-5 bg-gradient-to-r from-purple-500 to-blue-500 rounded-full flex items-center justify-center mr-2">
+                <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                </svg>
+              </div>
+              <span className="bg-gradient-to-r from-purple-600 to-blue-600 bg-clip-text text-transparent">
+                AI Insights
+              </span>
+              <span className="ml-2 text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">
+                Real Data
+              </span>
+            </h4>
+          </div>
+
+          {loadingInsights ? (
+            <div className="space-y-2.5">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center space-x-3 p-2 bg-gray-50 rounded-lg">
+                  <div className="w-5 h-5 bg-gray-200 rounded-full animate-pulse"></div>
+                  <div className="h-3 bg-gray-200 rounded animate-pulse flex-1"></div>
+                </div>
+              ))}
+            </div>
+          ) : insights ? (
+            <div className="space-y-2.5">
+              <div className="flex items-start space-x-3 p-2 bg-purple-50/50 rounded-lg border border-purple-100/50 hover:bg-purple-50 transition-colors duration-200">
+                <span className="text-base mt-0.5">🏡</span>
+                <div className="flex-1">
+                  <p className="text-xs font-medium text-gray-800 leading-relaxed">{insights.neighborhood}</p>
+                  <span className="text-xs text-purple-600 font-medium">Neighborhood</span>
+                </div>
+              </div>
+              <div className="flex items-start space-x-3 p-2 bg-blue-50/50 rounded-lg border border-blue-100/50 hover:bg-blue-50 transition-colors duration-200">
+                <span className="text-base mt-0.5">🚗</span>
+                <div className="flex-1">
+                  <p className="text-xs font-medium text-gray-800 leading-relaxed">{insights.commute}</p>
+                  <span className="text-xs text-blue-600 font-medium">
+                    {insights.commute.includes('Downtown') ? 'Commute to Downtown' : 'Commute'}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-start space-x-3 p-2 bg-green-50/50 rounded-lg border border-green-100/50 hover:bg-green-50 transition-colors duration-200">
+                <span className="text-base mt-0.5">🛒</span>
+                <div className="flex-1">
+                  <p className="text-xs font-medium text-gray-800 leading-relaxed">{insights.lifestyle}</p>
+                  <span className="text-xs text-green-600 font-medium">Lifestyle</span>
+                </div>
+              </div>
+              <div className="flex items-start space-x-3 p-2 bg-orange-50/50 rounded-lg border border-orange-100/50 hover:bg-orange-50 transition-colors duration-200">
+                <span className="text-base mt-0.5">🎓</span>
+                <div className="flex-1">
+                  <p className="text-xs font-medium text-gray-800 leading-relaxed">{insights.schools}</p>
+                  <span className="text-xs text-orange-600 font-medium">Schools</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-xs text-gray-500 italic p-3 bg-gray-50 rounded-lg text-center">
+              <svg className="w-4 h-4 mx-auto mb-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+              </svg>
+              AI insights temporarily unavailable
+            </div>
+          )}
+        </div>
 
         {/* View Details Button */}
         {listing.url && (

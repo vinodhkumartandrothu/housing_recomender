@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     rapidapi_key: Optional[str] = None
     rapidapi_host: str = "realty-in-us.p.rapidapi.com"
 
+    # Property Insights API Keys
+    walkscore_api_key: Optional[str] = None
+    google_maps_api_key: Optional[str] = None
+    yelp_api_key: Optional[str] = None
+    greatschools_api_key: Optional[str] = None
+
     # Redis Cache
     redis_url: str = "redis://localhost:6379"
 

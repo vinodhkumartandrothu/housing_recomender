@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import HTTPException
 import httpx
 from ..core.config import settings
-
+import json
 
 PROPERTY_TYPE_MAP = {
     "apartment": "apartment_condo",
@@ -20,7 +20,10 @@ class RealtorService:
         self.rapidapi_host = settings.rapidapi_host
 
         if not self.rapidapi_key:
-            raise ValueError("Missing RAPIDAPI_KEY in .env or config.py")
+            print("Warning: RAPIDAPI_KEY not found - realtor service will be disabled")
+            self.enabled = False
+        else:
+            self.enabled = True
 
     async def fetch_realtor_listings(
         self,
@@ -135,12 +138,31 @@ class RealtorService:
             raise HTTPException(status_code=500, detail=f"Failed to fetch listings: {str(e)}")
 
     def _parse_listing(self, prop: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        print(f"🔍 DEBUG Location data: {json.dumps(prop.get('location', {}), indent=2)}")
         """Parse and normalize a property result from Realtor API"""
         try:
             location = prop.get("location") or {}
             address = location.get("address") or {}
             description = prop.get("description") or {}
             community = prop.get("community") or {}
+
+            street_line = address.get("line", "")
+            street_number = address.get("street_number", "")
+            street_name = address.get("street_name", "")
+            city = address.get("city", "")
+            state = address.get("state_code", "")
+            postal_code = address.get("postal_code", "")
+
+            if street_line:
+                full_address = f"{street_line}, {city}, {state} {postal_code}"
+            elif street_number and street_name:
+                full_address = f"{street_number} {street_name}, {city}, {state} {postal_code}"
+            else:
+                full_address = f"{city}, {state}"
+            
+            # Debug log to see what we got
+            print(f"📍 Extracted address: {full_address}")
+        
 
             # Price extraction with proper range handling
             price = None
@@ -227,7 +249,28 @@ class RealtorService:
 
             address_line = address.get("line", "")
             city = address.get("city", "")
+            state = address.get("state_code", "")  
             property_type = description.get("type", "")
+
+            if address_line and city and state:
+                full_address = f"{address_line}, {city}, {state}"
+            elif city and state:
+                full_address = f"{city}, {state}"
+            else:
+                full_address = None  # No usable address data
+
+            # Build a proper full address (if available)
+            state_code = address.get("state_code", "")
+            postal_code = address.get("postal_code", "")
+
+            full_address = None
+            if address_line and city and state_code:
+                # Best case → use full street + city + state + ZIP
+                parts = [address_line, city, state_code]
+                if postal_code:
+                    parts.append(str(postal_code))
+                full_address = ", ".join(parts)
+
 
             title_parts = []
             if bedrooms: title_parts.append(f"{bedrooms}BR")
@@ -315,6 +358,13 @@ class RealtorService:
                 # Set primary photo as the first valid photo
                 primary_photo = photo_urls[0] if photo_urls else None
 
+            # Extract coordinates if available
+            latitude = None
+            longitude = None
+            coords = address.get("coordinate") or location.get("coordinate")
+            if coords:
+                latitude = coords.get("lat") or coords.get("latitude")
+                longitude = coords.get("lon") or coords.get("longitude")
 
             return {
                 "id": str(prop.get("property_id", "")),
@@ -327,15 +377,23 @@ class RealtorService:
                 "square_feet": int(square_feet) if square_feet else None,
                 "city": city,
                 "state": address.get("state_code", ""),
+                "address": full_address,  # ✅ exact property address
+                "full_address": full_address,
+
+                "latitude": latitude,     # ✅ NEW
+                "longitude": longitude,   # ✅ NEW
                 "url": prop.get("href", ""),
                 "source": "Realtor",
-                "photo_url": primary_photo,  # Primary photo for easy access
-                "photos": photo_urls,  # All available photos
+                "photo_url": primary_photo,
+                "photos": photo_urls,
                 "beds_min": description.get("beds_min"),
                 "beds_max": description.get("beds_max"),
                 "sqft_min": description.get("sqft_min"),
                 "sqft_max": description.get("sqft_max"),
             }
+        
+        
+
         except Exception:
             return None
 
