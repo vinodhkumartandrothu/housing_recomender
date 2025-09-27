@@ -4,10 +4,14 @@ from typing import List
 from ...core.database import get_db
 from ...models.listing import Listing
 
-router = APIRouter()
+# router = APIRouter()
 
 
-@router.get("/listings")
+# @router.get("/listings")
+router = APIRouter(prefix="/listings", tags=["listings"])
+
+@router.get("")
+
 async def get_listings(
     limit: int = 10,
     offset: int = 0,

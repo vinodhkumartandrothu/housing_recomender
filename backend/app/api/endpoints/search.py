@@ -5,9 +5,12 @@ from ...core.database import get_db
 from ...models.listing import Listing
 from ...services.realtor_service import fetch_realtor_listings
 
-router = APIRouter()
+# router = APIRouter()
 
-@router.get("/search")
+# @router.get("/search")
+router = APIRouter(prefix="/search", tags=["search"])
+
+@router.get("")
 async def search_listings(
     city: Optional[str] = Query(None, description="City to search in"),
     state_code: Optional[str] = Query(None, description="2-letter state code (required for API search)"),
